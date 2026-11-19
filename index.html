@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>НП — корпусные изделия</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header id="menubar">
+    <div class="menu" data-menu="project">Проект
+      <div class="menu-list">
+        <button data-cmd="new">Новый проект</button>
+        <button data-cmd="save">Сохранить в файл…</button>
+        <button data-cmd="open">Открыть из файла…</button>
+        <button data-cmd="info">Данные договора…</button>
+      </div>
+    </div>
+    <div class="menu" data-menu="edit">Правка
+      <div class="menu-list">
+        <button data-cmd="undo">Отменить <kbd>Ctrl+Z</kbd></button>
+        <button data-cmd="redo">Повторить <kbd>Ctrl+Shift+Z</kbd></button>
+        <button data-cmd="delete">Удалить деталь <kbd>Del</kbd></button>
+        <button data-cmd="settings">Настройки изделия…</button>
+        <button data-cmd="remove-product">Удалить изделие</button>
+      </div>
+    </div>
+    <div class="menu" data-menu="view">Вид
+      <div class="menu-list">
+        <button data-cmd="view-front">Спереди</button>
+        <button data-cmd="view-top">Сверху</button>
+        <button data-cmd="view-iso">Изометрия</button>
+        <button data-cmd="boundary-color">Цвет линий границ</button>
+        <button data-cmd="toggle-doors">Скрыть / показать двери</button>
+        <button data-cmd="toggle-walls">Скрыть / показать стены</button>
+      </div>
+    </div>
+    <div class="menu" data-menu="report">Отчёты
+      <div class="menu-list">
+        <button data-cmd="report-xlsx">ДЕТАЛИРОВКА EXCEL</button>
+      </div>
+    </div>
+    <span id="price-info"></span>
+  </header>
+
+  <div id="actionbar">
+    <div id="product-actions" role="group" aria-label="Управление изделием">
+      <button type="button" data-turn="90" aria-label="Повернуть вправо на 90°" title="Повернуть изделие по часовой стрелке"><img src="img/toolbar/rotate-right.png" alt=""></button>
+      <button type="button" data-turn="-90" aria-label="Повернуть влево на 90°" title="Повернуть изделие против часовой стрелки"><img src="img/toolbar/rotate-left.png" alt=""></button>
+      <button id="product-move" type="button" aria-pressed="false" aria-label="Передвижение" title="Режим перемещения изделия"><img src="img/toolbar/move-product.png" alt=""></button>
+    </div>
+    <button id="part-outline" type="button" data-cmd="part-outline" aria-label="Обводка деталей"><img src="img/toolbar/part-outline.png" alt=""></button>
+    <div id="panel-actions" role="group" aria-label="Панели редактора">
+      <button id="left-toggle" type="button" title="Левое меню" aria-label="Левое меню" aria-controls="left" aria-expanded="true"><img src="img/toolbar/left-panel.png" alt=""></button>
+      <button id="right-toggle" type="button" title="Правое меню" aria-label="Правое меню" aria-controls="right" aria-expanded="false"><img src="img/toolbar/right-panel.png" alt=""></button>
+    </div>
+  </div>
+
+  <main id="workspace">
+    <aside id="left">
+      <nav class="mode-row workspace-modes" aria-label="Разделы">
+        <button data-mode="room">Комната</button>
+        <button data-mode="product" data-sub="overview">Изделие</button>
+      </nav>
+      <section id="pane-room" class="pane">
+        <div class="grid3 labels"><span>Ширина</span><span>Высота</span><span>Глубина</span></div>
+        <div class="grid3">
+          <input id="room-w" type="number" value="3400" min="500" max="20000">
+          <input id="room-h" type="number" value="2700" min="500" max="6000">
+          <input id="room-g" type="number" value="2000" min="300" max="20000">
+        </div>
+        <button id="room-create" class="big">Создать комнату</button>
+        <button id="room-fill" type="button" aria-controls="pane-product">Наполнение комнаты</button>
+        <button id="room-apply">Применить размеры комнаты</button>
+        <div class="mode-row room-color-row">
+          <label for="room-wall-color">Цвет стен проекта</label>
+          <input id="room-wall-color" type="color">
+          <button id="room-wall-default" type="button">По умолчанию</button>
+        </div>
+        <div class="spacer"></div>
+        <button id="product-add" class="big">Добавить изделие</button>
+      </section>
+      <section id="pane-product" class="pane" hidden>
+        <nav class="mode-row product-modes" aria-label="Разделы изделия">
+          <button data-mode="product" data-sub="doors">Двери</button>
+          <button data-mode="product" data-sub="fill">Наполнение</button>
+        </nav>
+        <button id="product-settings" class="big" data-cmd="settings">Настройки изделия…</button>
+        <button id="product-remove" data-cmd="remove-product">Удалить изделие…</button>
+        <div id="catalog" class="catalog"></div>
+        <input id="catalog-search" type="search" placeholder="Поиск" aria-label="Поиск по наполнению">
+        <div class="preset" role="group" aria-label="Размеры устанавливаемой детали">
+          <input id="preset-1" type="number" value="0" min="0" step="1" aria-label="Размер 1" title="Размер 1, мм: высота перегородки или ящика с заданной высотой, ширина полки или заднего щита">
+          <button id="preset-on" type="button" aria-pressed="false" title="Учитывать заданный размер устанавливаемой детали">Фикс размеры</button>
+          <input id="preset-2" type="number" value="0" min="0" step="1" aria-label="Размер 2" title="Размер 2, мм: высота заднего щита или глубина полки, перегородки и ящика">
+        </div>
+      </section>
+    </aside>
+
+    <section id="center">
+      <div id="product-position" role="group" aria-label="Положение изделия" inert>
+        <button id="position-reference" type="button" aria-pressed="false">До комнаты</button>
+        <div id="product-offsets"></div>
+        <label class="position-field">Угол <input id="product-angle" type="text" inputmode="decimal"></label>
+      </div>
+      <div id="tabbar">
+        <div id="tabs"></div>
+      </div>
+      <button id="part-material" type="button" aria-label="Задать материал детали" aria-haspopup="dialog" aria-expanded="false" disabled>
+        <span id="part-material-caption"></span><span class="material-arrow" aria-hidden="true">⌃</span>
+      </button>
+      <div id="viewport">
+        <div id="project-history" role="group" aria-label="История проекта">
+          <button type="button" data-cmd="undo" aria-label="Шаг назад" title="Отменить последнее действие (Ctrl+Z)" disabled>&lt;</button>
+          <button type="button" data-cmd="redo" aria-label="Шаг вперёд" title="Повторить отменённое действие (Ctrl+Shift+Z)" disabled>&gt;</button>
+        </div>
+        <div id="hint"></div>
+        <button id="placement-confirm" type="button" hidden>Подтвердить расположение</button>
+      </div>
+    </section>
+
+    <aside id="right" aria-label="Параметры детали" hidden></aside>
+  </main>
+
+  <footer id="status">
+    <span id="status-shop"></span>
+    <span id="status-size">Ширина: 0  |  Высота: 0  |  Глубина: 0</span>
+  </footer>
+
+  <div id="modal-root"></div>
+  <div id="context-menu" role="menu" hidden></div>
+  <div id="toast"></div>
+  <input id="file-open" type="file" accept=".json,application/json" hidden>
+
+  <script src="vendor/exceljs.min.js" defer></script>
+  <script src="app.js" defer></script>
+</body>
+</html>
