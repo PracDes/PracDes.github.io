@@ -5,6 +5,7 @@ import { KIND, isPanel } from './model.js';
 import { OPENING_SUPPORTS } from './opora.js';
 import { defaultFastenings, resizeProductSpace, SLOTS } from './product.js';
 import { rootPart, violations } from './move.js';
+import { DRAWER_GAP } from './drawers.js';
 
 export const EDGE_MODES = { V: [1.2, 3], L: [0.03, 0.97], E: [0.98, 1.19] };
 const SIZE = { x: 'W', y: 'H', z: 'G' };
@@ -34,6 +35,15 @@ function updateBounds(project, product, dimensions, sides, physical) {
       let a = localShift;
       let b = localShift;
       if (physical) {
+        if (axis === 'y' && part.data.drawer) {
+          const boundary = surface ?? product.walls[moving];
+          const clearance = (low ? 1 : -1) * (part.box[moving] - inner);
+          const shift = part.nb[SIDE_NB[moving]] !== boundary.id ? 0
+            : clearance <= DRAWER_GAP + EPS ? motion
+            : (low ? 1 : -1) * Math.max(0, -delta + DRAWER_GAP - clearance);
+          route.set(part.id, [a + shift, b + shift]);
+          continue;
+        }
         const held = part.mount[moving] || part.grab[moving] >= 0;
         const follow = part === surface || touch(part.box[moving]) ||
           (held && (part.nb[SIDE_NB[moving]] === surface?.id || part.nb[SIDE_NB[moving]] === product.walls[moving].id));
@@ -48,18 +58,31 @@ function updateBounds(project, product, dimensions, sides, physical) {
     if (physical) {
       for (const part of parts) {
         if (part.parent || !(part.data.drawer || part.data.door)) continue;
+        if (part.data.drawer && axis === 'y') {
+          for (const side of [lo, hi]) {
+            const support = product.parts.get(part.nb[SIDE_NB[side]]);
+            if (!support) continue;
+            const face = side === lo ? 0 : 1;
+            const direction = side === lo ? 1 : -1;
+            const clearance = direction * (part.box[side] - support.box[OPPOSITE[side]]);
+            const shift = route.get(part.id)[face];
+            const travel = route.get(rootPart(product, support).id)[1 - face];
+            if (clearance + direction * (shift - travel) < Math.min(0, clearance) - EPS) {
+              throw new BuildError('Ящик не помещается по высоте после изменения габаритов изделия');
+            }
+          }
+          continue;
+        }
+        if (!part.data.door) continue;
         const changes = OPENING_SUPPORTS.filter((side) => side[0] === axis).map((side) => {
           const support = product.get(part.nb[side]);
           const index = side.endsWith('1') ? 1 : 0;
           return route.get(support?.id)?.[index] ?? (support === product.walls[moving] ? localShift + motion : localShift);
         });
-        if (part.data.drawer && axis !== 'y' && changes.some((d) => Math.abs(d - changes[0]) > EPS)) {
-          throw new BuildError('Выбранное изменение габаритов меняет проём установленного ящика');
-        }
-        if (part.data.door && changes.some((d) => Math.abs(d - changes[0]) > EPS)) {
+        if (changes.some((d) => Math.abs(d - changes[0]) > EPS)) {
           throw new BuildError('Выбранное изменение габаритов меняет проём установленной двери');
         }
-        if (part.data.door && changes.length) route.set(part.id, [changes[0], changes[0]]);
+        if (changes.length) route.set(part.id, [changes[0], changes[0]]);
       }
     }
     for (const part of parts) {

@@ -45,7 +45,23 @@ export function findNeighbors(product, box, selfId = 0, filter = null) {
 
 export function opora(product, part) {
   if (part.casper) return part.nb;
-  part.nb = findNeighbors(product, part.box, part.id);
+  const nb = findNeighbors(product, part.box, part.id, part.data.drawer ? null : (candidate) => {
+    if (!candidate.data.drawer) return true;
+    const drawer = candidate.parent ? product.get(candidate.parent) : candidate;
+    return drawer?.nb.x1 !== part.id && drawer?.nb.x2 !== part.id;
+  });
+  if (part.data.drawer && !part.parent) {
+    let cabinet;
+    for (const side of ['x1', 'x2', 'z1', 'z2']) {
+      const support = product.get(part.nb[side]);
+      if (support && !support.data.drawer && (!support.data.door || side === 'z2')) nb[side] = support.id;
+      else if (product.get(nb[side])?.parent) {
+        cabinet ??= findNeighbors(product, part.box, part.id, (candidate) => !candidate.parent && !candidate.data.drawer && !candidate.data.door);
+        nb[side] = cabinet[side];
+      }
+    }
+  }
+  part.nb = nb;
   return part.nb;
 }
 

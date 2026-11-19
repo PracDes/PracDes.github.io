@@ -76,9 +76,9 @@ export function batchDialog(app, target, tool, item, point, drawer, preferences)
   const overlay = (choices) => choices[0].input.checked ? 'full' : choices[1].input.checked ? 'half' : '';
   const fields = { depth, size, count, bodyHeight, grid, low, high };
   const checks = { autoDepth, autoSize, autoCount, automaticBody, lower, upper };
-  const read = () => {
+  const read = (position = point) => {
     const config = { count: value(count), depth: autoDepth.input.checked ? null : value(depth) };
-    return drawer ? drawerBatch(opening, point, { ...config, autoHeight: autoSize.input.checked, autoCount: autoCount.input.checked,
+    return drawer ? drawerBatch(opening, position, { ...config, autoHeight: autoSize.input.checked, autoCount: autoCount.input.checked,
       height: value(size), bodyHeight: automaticBody.input.checked ? null : value(bodyHeight),
       upper: overlay(overlays[0]), lower: overlay(overlays[1]) })
       : panelBatch(opening, { ...config, autoGap: autoSize.input.checked, gap: value(size), grid: grid.selectedIndex === 1,
@@ -88,7 +88,7 @@ export function batchDialog(app, target, tool, item, point, drawer, preferences)
     error.hidden = true;
     setAutomatic(depth, autoDepth.input.checked);
     setAutomatic(bodyHeight, automaticBody.input.checked);
-    const plan = read();
+    const plan = read(tool.prepare ? { ...point, drawerOptions: { cutLevels: true } } : point);
     size.disabled = autoSize.input.checked;
     count.disabled = autoCount.input.checked;
     grid.hidden = !autoSize.input.checked;
@@ -149,13 +149,19 @@ export function batchDialog(app, target, tool, item, point, drawer, preferences)
       overlays.map((choices) => h('div', {}, choices.map((choice) => choice.row))))]
       : [grid, offset(upper, high, false), offset(lower, low, true)], error);
   refresh();
+  let applying = false;
   openModal({ title: drawer ? 'Добавление ящиков' : 'Установка полок',
     className: `batch-modal ${drawer ? 'drawer-batch' : 'panel-batch'}`, body,
-    buttons: [{ text: 'Установить', action: (close) => {
+    buttons: [{ text: 'Установить', action: async (close) => {
+      if (applying) return;
       const invalid = Object.values(fields).find((field) => !field.disabled && !field.validity.valid);
       if (invalid) { invalid.reportValidity(); return; }
+      applying = true;
       try {
-        const points = read().points(point);
+        const draft = tool.prepare ? await tool.prepare(target, item, { ...point, supportIds: opening.supportIds }, false) : point;
+        if (!draft) return;
+        const points = read(draft).points(point);
+        if (tool.prepare) batchDimensions(app.db, target, item, points, null, drawer);
         if (app.placeBatch(tool, target.id, item, points)) {
           preferences.current = {
             fields: Object.fromEntries(Object.entries(fields).map(([key, field]) => [key,
@@ -167,7 +173,7 @@ export function batchDialog(app, target, tool, item, point, drawer, preferences)
       } catch (failure) {
         error.textContent = failure.message;
         error.hidden = false;
-      }
+      } finally { applying = false; }
     } }],
   });
 }

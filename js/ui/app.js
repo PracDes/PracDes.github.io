@@ -531,6 +531,17 @@ export class App extends EventTarget {
   placeAt(point) {
     const { tool, product } = this;
     if (!tool || !product) return null;
+    if (tool.prepare) {
+      const item = tool.spec();
+      return tool.prepare(product, item, point, true).then((draft) => {
+        if (!draft || this.tool !== tool || this.product !== product) return null;
+        return this.mutate(() => tool.place(this, product, draft, item));
+      }).catch((error) => {
+        if (!(error instanceof BuildError)) throw error;
+        this.toast(error.message);
+        return null;
+      });
+    }
     return this.mutate(() => tool.place(this, product, point));
   }
 

@@ -3,6 +3,7 @@ import { KIND, isPanel, Part } from './model.js';
 import { findNeighbors, opora, neighbors, OPENING_SUPPORTS } from './opora.js';
 import { applyMaterial, loadEdges, applyEdges } from './material.js';
 import { loadKrep } from './krep.js';
+import { reflowDrawers } from './drawers.js';
 
 export const KREP_PAZ = 19489;
 export const KREP_CHETVERT = 22934;
@@ -94,12 +95,13 @@ export function refresh(db, product, part) {
   applyEdges(product, part);
 }
 
-export function relayout(db, product) {
+export function relayout(db, product, options) {
   for (let pass = 0; pass < 2; pass++) {
     for (const part of product.parts.values()) {
       if (part.kind >= 6 && !part.parent) fit(product, part);
     }
   }
+  reflowDrawers(db, product, options);
   for (const part of product.parts.values()) if (part.kind >= 6) refresh(db, product, part);
 }
 

@@ -2,7 +2,7 @@ import { BuildError, placementNeighbors, planPanelInsertion } from './build.js';
 import { AXIS_SIDES, EPS } from './geom.js';
 import { KIND } from './model.js';
 import { neighbors } from './opora.js';
-import { DRAWER_GAP, drawerHandleGap, drawerSupport, planDrawer } from './drawers.js';
+import { DRAWER_GAP, drawerHandleGap, drawerSupport, drawerOverlayAmount, planDrawer } from './drawers.js';
 import { planRoomElement } from './room.js';
 
 const MAX_COUNT = 100;
@@ -24,7 +24,7 @@ export function batchOpening(product, item, point, drawer) {
   }
   if (end <= start) throw new BuildError('В этом месте нет свободного проёма');
   const front = Math.max(nb.x1.box.f, nb.x2.box.f);
-  const canOverlay = (part) => [KIND.POL, KIND.POLKA].includes(part.kind) && !part.parent && part.box.f <= front + EPS;
+  const canOverlay = (part) => [KIND.POL, KIND.POLKA].includes(part.kind) && part.group === 1 && !part.parent && part.box.f < front + 3;
   return {
     axis, start, end, span: end - start, supportIds,
     thickness: Number(item[axis === 'x' ? 'W' : 'H']) || 16,
@@ -70,18 +70,16 @@ export function panelBatch(opening, config) {
   } };
 }
 
-const overlayAmount = (thickness, mode) => mode === 'full' ? thickness : mode === 'half' && thickness ? thickness / 2 + 1 : 0;
-
 export function drawerBatch(opening, point, config) {
   const { span, start, end, overlayLow, overlayHigh, handleGap, supportIds } = opening;
-  const upper = overlayAmount(overlayHigh, config.upper);
+  const upper = drawerOverlayAmount(overlayHigh, config.upper);
   let { count, height } = config;
   if (config.autoCount) {
     count = height >= 90 && height <= 500
-      ? Math.floor((span - DRAWER_GAP + overlayAmount(overlayLow, config.lower) + upper) / (height + handleGap))
+      ? Math.floor((span - DRAWER_GAP + drawerOverlayAmount(overlayLow, config.lower) + upper) / (height + handleGap))
       : NaN;
   }
-  const lower = count > 1 ? overlayAmount(overlayLow, config.lower) : 0;
+  const lower = count > 1 ? drawerOverlayAmount(overlayLow, config.lower) : 0;
   const available = span - DRAWER_GAP + lower + upper;
   if (config.autoHeight && count > 0) height = (available - handleGap * count) / count;
   return { count, height, points() {

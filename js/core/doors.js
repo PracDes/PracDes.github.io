@@ -4,7 +4,7 @@ import { parseIdList } from './db.js';
 import { neighbors } from './opora.js';
 import { placementNeighbors, relayout, BuildError } from './build.js';
 import { isKit } from './product.js';
-import { DRAWER_KINDS, releaseDrawer } from './drawers.js';
+import { DRAWER_KINDS, releaseDrawer, resumeDrawerCuts } from './drawers.js';
 
 const DK = { LEAF: 4, HANDLE: 10, HINGE_IN: 18, HINGE_ON: 19, HINGE_HALF: 20, MAX_W: 31, MIN_W: 39, MAX_H: 38, MIN_H: 40 };
 export const OVERLAYS = { in: 'Вкладная', full: 'Накладная', half: 'Полунакладная' };
@@ -71,6 +71,7 @@ export function doorOpeningFromParts(parts) {
   return {
     x: (left.box.r + right.box.l) / 2,
     y: (bottom.box.t + top.box.b) / 2,
+    z: Math.min(left.box.f, right.box.f, bottom.box.f, top.box.f) - FRONT_OFFSET,
     sides: { x1: left.id, x2: right.id, y1: bottom.id, y2: top.id },
   };
 }
@@ -80,8 +81,8 @@ export function createDoor(project, db, product, system, cfg, point) {
   const leafRow = db.get(cfg.kod);
   if (!leafRow) throw new BuildError('Не выбран материал двери');
   const t = leafRow.t;
-  const { supportIds } = point;
-  const nbIds = { ...placementNeighbors(product, supportIds ? point : { ...point, z: product.G - FRONT_OFFSET }), ...point.sides };
+  const useLocalOpening = point.supportIds || point.sides;
+  const nbIds = { ...placementNeighbors(product, useLocalOpening ? point : { ...point, z: product.G - FRONT_OFFSET }), ...point.sides };
   const nb = neighbors(product, nbIds);
   const sides = { l: nb.x1, r: nb.x2, b: nb.y1, t: nb.y2 };
   const axisOf = { l: 'x', r: 'x', b: 'y', t: 'y' };
@@ -105,8 +106,9 @@ export function createDoor(project, db, product, system, cfg, point) {
   const anyOverlay = Object.values(over).some((o) => o !== 'in');
   const fronts = Object.values(sides).filter((p) => p.kind >= 6).map((p) => p.box.f);
   const pz = fronts.length ? Math.min(...fronts) : product.G;
-  const front = anyOverlay && !supportIds ? product.G : pz;
-  const zg = front - t;
+  const front = anyOverlay && !useLocalOpening ? product.G : pz;
+  const zg = Math.max(front - t, ...Object.keys(sides)
+    .filter((s) => over[s] !== 'in' && sides[s].data.yglyb).map((s) => sides[s].box.f));
   if (zr - zl <= 0 || zt - zb <= 0) throw new BuildError('Не удалось определить проём двери');
 
   const gap = (s) => (over[s] === 'half' ? 1 : 2);
@@ -127,8 +129,8 @@ export function createDoor(project, db, product, system, cfg, point) {
   for (const s of ['l', 'r', 'b', 't']) {
     const p = sides[s];
     if (p.kind < 6) continue;
-    cuts.push({ id: p.id, f: p.box.f, stenDver: p.stenDver });
-    if (over[s] !== 'in' && p.box.f > zg) p.box.f = zg;
+    cuts.push({ id: p.id, f: p.box.f, stenDver: p.stenDver, overlay: over[s] });
+    if (over[s] !== 'in' && !p.data.yglyb && p.box.f > zg) p.box.f = zg;
     p.stenDver = zone.id;
   }
 
@@ -202,6 +204,7 @@ export function removeAssemblies(project, db, product, roots) {
         } else {
           p.box.f = Math.max(p.box.f, cut.f);
           p.stenDver = cut.stenDver;
+          resumeDrawerCuts(product, p);
         }
       }
     }

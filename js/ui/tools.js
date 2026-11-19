@@ -1,12 +1,51 @@
 import { KIND, PANEL_KINDS } from '../core/model.js';
 import { previewBox } from '../core/build.js';
-import { DRAWER_KINDS, automaticDrawerHeight, drawerHandles, drawerNeedsHandle, previewDrawer } from '../core/drawers.js';
-import { pickRow } from './dialogs.js';
+import { DRAWER_KINDS, automaticDrawerHeight, drawerHandles, drawerNeedsHandle, drawerPreparationQuestions, planDrawer, previewDrawer } from '../core/drawers.js';
+import { h, openModal, pickRow } from './dialogs.js';
 import { batchDialog } from './batch-dialog.js';
 
 const panelBatchSettings = {};
 const drawerBatchSettings = {};
 const hasPanelOptions = (item) => item.id === KIND.POLKA || item.id === KIND.PEREG;
+
+function drawerQuestion(text, no = 'Нет', yes = 'Да') {
+  return new Promise((resolve) => openModal({
+    title: 'Установка накладного ящика', body: h('div', {}, text), onClose: resolve,
+    buttons: [{ text: no, action: (close) => close(false) }, { text: yes, primary: true, action: (close) => close(true) }],
+  }));
+}
+
+async function prepareDrawer(app, product, item, point, single) {
+  const options = { cutSides: false, ...point.drawerOptions };
+  const draft = { ...point, drawerOptions: options };
+  let questions = drawerPreparationQuestions(app.db, product, item, draft);
+  if (questions.cutSides) {
+    options.cutSides = await drawerQuestion('Необходимо ли уменьшить ширину боковин на толщину фасада?');
+    if (options.cutSides == null) return null;
+  }
+  questions = drawerPreparationQuestions(app.db, product, item, draft);
+  if (questions.cutLevels) {
+    options.cutLevels = await drawerQuestion('Необходимо ли уменьшить ширину полки сверху / снизу на толщину фасада?');
+    if (options.cutLevels == null) return null;
+  }
+  for (const [key, text] of [['left', 'левую'], ['right', 'правую']]) {
+    if (!questions[key]) continue;
+    options[key] = await drawerQuestion(`Наложить на ${text} боковину?`);
+    if (options[key] == null) return null;
+  }
+  if (!single) return draft;
+  questions = planDrawer(app.db, product, item, draft).questions;
+  for (const [key, direction] of [['lower', 'снизу'], ['upper', 'сверху']]) {
+    if (!questions[key]) continue;
+    const overlay = await drawerQuestion(`Наложить фасад ящика ${direction}?`);
+    if (overlay == null) return null;
+    if (!overlay) continue;
+    const full = await drawerQuestion('Наложить полностью?', 'На половину', 'Полностью');
+    if (full == null) return null;
+    options[key] = full ? 'full' : 'half';
+  }
+  return draft;
+}
 
 function startTool(app, item, sized, place, preview, batch, drawer = false) {
   app.select(0);
@@ -15,6 +54,10 @@ function startTool(app, item, sized, place, preview, batch, drawer = false) {
     place: (a, product, point, spec = sized()) => place(a, product, spec, point),
     preview: (product, point) => preview(product, sized(), point),
   };
+  if (item.id === KIND.BOX_NAKL) {
+    tool.prepare = (product, spec, point, single) => prepareDrawer(app, product, spec, point, single);
+    tool.spec = sized;
+  }
   if (batch) tool.options = (point) => batchDialog(app, app.product, tool, sized(), point, drawer, batch);
   app.setTool(tool);
 }
