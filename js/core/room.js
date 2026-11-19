@@ -4,7 +4,7 @@ import { catalogSizeLimits, cursorBox, previewBox } from './build.js';
 import { findMaterial } from './material.js';
 import { findNeighbors, opening } from './opora.js';
 import { attachmentGap } from './krep.js';
-import { constrainDelta, openingSizeLimits } from './move.js';
+import { constrainDelta, openingSizeLimits, partSizeLimits, resizeFaces } from './move.js';
 
 export const ROOM_WALLS = { g: 'Задняя стена', l: 'Левая стена', r: 'Правая стена', f: 'Передняя стена' };
 export const DEFAULT_WALL_COLOR = '#b9b6ae';
@@ -46,7 +46,7 @@ export function roomItemSpec(db, item) {
     }
     const spanAxis = item.group === 5 && !tag && !anchor && dims.x > 0
       ? AXES.find((axis) => !dims[axis] && AXES.every((other) => other === axis || dims[other] > 0)) : undefined;
-    return { kind: item.id, title, tag, wall: anchor, dims, spanAxis };
+    return { kind: item.id, title, tag, wall: anchor, dims, spanAxis, ...catalogSizeLimits(item) };
   }
   const axis = GROUP_THICK_AXIS[item.group];
   const thickness = Number(item[ROOM_DIMENSION[axis]]);
@@ -247,10 +247,10 @@ export function windowMoveBounds(room, element, box, sill, sillBox) {
   return boxes.map((box) => ({ box, bounds: opening(boundary, findNeighbors(boundary, box)) }));
 }
 
-export function roomDependentRange(db, room, element, axis, carriedSill) {
+export function roomDependentRange(db, room, element, axis, carriedSill, rootShift = [1, 1]) {
   const [lo, hi] = AXIS_SIDES[axis];
   const parts = new Map(room.elements.map((part) => [part.id, { part, mounts: roomMounts(part) }]));
-  const shifts = new Map([[element.id, [1, 1]]]);
+  const shifts = new Map([[element.id, rootShift]]);
   if (carriedSill) shifts.set(carriedSill.id, [1, 1]);
   const motion = (id) => {
     if (shifts.has(id)) return shifts.get(id);
@@ -278,6 +278,31 @@ export function roomDependentRange(db, room, element, axis, carriedSill) {
     constrainDelta(range, -b, room[ROOM_DIMENSION[axis]] - box[hi]);
   }
   return range;
+}
+
+export function resizedRoomElementBox(db, room, element, axis, size, keepHigh) {
+  const [lo, hi] = AXIS_SIDES[axis];
+  const mounts = roomMounts(element);
+  const fixedLow = !!mounts[lo];
+  const fixedHigh = !!mounts[hi];
+  if (fixedLow && fixedHigh) return null;
+  const box = roomElementBox(room, element);
+  const { min, max } = partSizeLimits(db, new Part(element), axis);
+  if (min > max) return null;
+  const target = Math.min(max, Math.max(min, size));
+  if (Math.abs(box.size(axis) - target) < EPS) return null;
+  const sill = windowSill(room, element);
+  const boundary = roomBoundary(room, (part) => part === sill || part.id === element.windowId);
+  const bounds = opening(boundary, findNeighbors(boundary, box, element.id));
+  const resized = { ...element, box };
+  const layout = { ...room, elements: room.elements.map((part) => part === element ? resized : part) };
+  const changed = resizeFaces(box, axis, target, { keepHigh, fixedLow, fixedHigh }, (side, requested, motion) => {
+    const range = roomDependentRange(db, layout, resized, axis, false, motion);
+    const min = Math.min(0, Math.max(range.min, side === lo ? bounds[lo] - box[lo] : -Infinity));
+    const max = Math.max(0, Math.min(range.max, side === hi ? bounds[hi] - box[hi] : Infinity));
+    box[side] += Math.max(min, Math.min(max, requested));
+  });
+  return changed ? box : null;
 }
 
 export function roomPlacementContext(room, point, spec) {

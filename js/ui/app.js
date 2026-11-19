@@ -8,7 +8,7 @@ import { createDrawer, restoreDrawerGuides } from '../core/drawers.js';
 import { AXIS_SIDES, OPPOSITE, SIDES, SIDE_AXIS, SIDE_NB, edgeSides } from '../core/geom.js';
 import { attachmentGap, loadKrep } from '../core/krep.js';
 import { canUsePartMaterial, edgeChoices, replacePartMaterial } from '../core/material.js';
-import { addWindowSill, clampRoomOffset, detachWindowSill, isRoomLamp, planRoomElement, restoreWindowSills, roomAxisFixed, roomElementBox,
+import { addWindowSill, clampRoomOffset, detachWindowSill, isRoomLamp, planRoomElement, resizedRoomElementBox, restoreWindowSills, roomAxisFixed, roomElementBox,
   roomDependentRange, roomElementFits, roomElementUsesWallColor, roomKrepContext, roomMounts, roomSillTouches, roomWallSupport, setRoomAttachmentKrep, toggleRoomAttachment,
   windowMoveBounds, windowSill } from '../core/room.js';
 import { applyProductSettings } from '../core/product-settings.js';
@@ -369,14 +369,9 @@ export class App extends EventTarget {
   resizeRoomElement(axis, size, fromOpposite = false) {
     const element = this.roomSelected;
     const { room } = this.project;
-    if (!this.editingRoom || !element || element.tag === 'Розетка' || !Number.isFinite(size) || size <= 0) return false;
-    const box = roomElementBox(room, element);
-    const mounts = roomMounts(element);
-    const [lo, hi] = AXIS_SIDES[axis];
-    if (mounts[lo] && mounts[hi]) return false;
-    const side = mounts[lo] || !mounts[hi] && !fromOpposite ? lo : hi;
-    box.setSize(axis, size, side);
-    if (!roomElementFits(room, { ...element, box })) { this.toast('Элемент выходит за границы комнаты'); return false; }
+    if (!this.editingRoom || !element || element.tag === 'Розетка' || this.dragSnap || !Number.isFinite(size)) return false;
+    const box = resizedRoomElementBox(this.db, room, element, axis, size, fromOpposite);
+    if (!box || !roomElementFits(room, { ...element, box })) return false;
     return this.mutate(() => { this.setRoomElementBox(room, element, box); return true; });
   }
 
@@ -675,10 +670,11 @@ export class App extends EventTarget {
   }
 
   resizeSelected(axis, size, keepHigh = false) {
+    if (this.dragSnap) return false;
     const { product, selectedParts } = this;
     const targets = selectedParts.filter((part) => canResize(part, axis));
     if (!targets.length) return this.toast('Размер определяется проёмом или комплектом');
-    this.mutate(() => targets.reduce((changed, part) =>
+    return this.mutate(() => targets.reduce((changed, part) =>
       resizePart(this.db, product, part, axis, size, keepHigh) || changed, false), { skipUnchanged: true });
   }
 

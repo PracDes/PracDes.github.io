@@ -536,8 +536,8 @@ export class Panels {
     const value = round(size);
     const keepFieldFocus = (event) => { if (event.button === 0) event.preventDefault(); };
     const input = h('input', {
-      type: 'text', inputMode: 'decimal', value, disabled, ariaLabel: label,
-      title: 'Enter — применить. Shift+Enter — двигать левую, нижнюю или заднюю грань.',
+      type: 'text', inputMode: 'decimal', enterKeyHint: 'done', value, disabled, ariaLabel: label,
+      title: 'Enter — применить с учётом доступного места. Shift+Enter — сначала двигать левую, нижнюю или заднюю грань.',
       onkeydown: (event) => {
         if (event.key !== 'Enter' || event.isComposing) return;
         event.preventDefault();

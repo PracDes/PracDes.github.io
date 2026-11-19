@@ -2,7 +2,7 @@ import { AXIS_SIDES, OPPOSITE, SIDES, SIDE_NB, SIDE_AXIS, EPS } from './geom.js'
 import { KIND } from './model.js';
 import { materialLimits } from './material.js';
 import { opora } from './opora.js';
-import { fit, relayout, BuildError } from './build.js';
+import { relayout, BuildError } from './build.js';
 
 export const DRAG_STEP = 10;
 const AXES = ['x', 'y', 'z'];
@@ -13,12 +13,17 @@ const SHIFT = [1, 1];
 const held = (part, side) => part.mount[side] || part.grab[side] !== -1;
 const gap = (part, side) => part.grab[side] === -1 ? 0 : part.grab[side];
 
-export function openingSizeLimits(db, part, axis) {
+export function partSizeLimits(db, part, axis) {
   const { min, max } = materialLimits(db, part);
-  const least = Math.max(1, min[axis] ?? 0, part.min[axis] ?? 0);
-  const most = UNLIMITED_OPENING[axis]?.has(part.kind) ? Infinity
-    : Math.min(max[axis] > 0 ? max[axis] : Infinity, part.max[axis] > 0 ? part.max[axis] : Infinity);
-  return { min: least, max: most };
+  return {
+    min: Math.max(EPS, min[axis] ?? 0, part.min[axis] ?? 0),
+    max: Math.min(max[axis] > 0 ? max[axis] : Infinity, part.max[axis] > 0 ? part.max[axis] : Infinity),
+  };
+}
+
+export function openingSizeLimits(db, part, axis) {
+  const { min, max } = partSizeLimits(db, part, axis);
+  return { min: Math.max(1, min), max: UNLIMITED_OPENING[axis]?.has(part.kind) ? Infinity : max };
 }
 
 export function rootPart(product, part) {
@@ -52,10 +57,10 @@ export function canMove(product, part, axis) {
 
 export function canResize(part, axis) {
   const [lo, hi] = AXIS_SIDES[axis];
-  return !part.parent && !part.casper && !part.data.drawer && !(part.mount[lo] && part.mount[hi]);
+  return !part.parent && !part.casper && !part.data.drawer && !(held(part, lo) && held(part, hi));
 }
 
-function movement(product, root, axis) {
+function movement(product, root, axis, rootShift = SHIFT) {
   const [lo, hi] = AXIS_SIDES[axis];
   const dependents = new Map();
   for (const part of product.realParts()) {
@@ -66,7 +71,7 @@ function movement(product, root, axis) {
       dependents.get(id).push(part);
     }
   }
-  const shifts = new Map([[root.id, SHIFT]]);
+  const shifts = new Map([[root.id, rootShift]]);
   const motion = (id) => shifts.get(id) ?? STILL;
   const travels = (id) => motion(id).every(Boolean);
   const displacement = (part) => {
@@ -100,7 +105,7 @@ export function constrainDelta(range, rate, value, min = 0, max = Infinity) {
   range.max = Math.min(range.max, rate > 0 ? upper : -lower);
 }
 
-function movementRange(db, product, axis, shifts) {
+function movementRange(db, product, axis, shifts, resized = null) {
   const [lo, hi] = AXIS_SIDES[axis];
   const range = { min: -Infinity, max: Infinity };
   for (const [id, [a, b]] of shifts) {
@@ -112,7 +117,7 @@ function movementRange(db, product, axis, shifts) {
     const innerHigh = upper.box[lo] - gap(part, hi);
     const before = shifts.get(lower.id)?.[1] ?? 0;
     const after = shifts.get(upper.id)?.[0] ?? 0;
-    if (a !== b) {
+    if (a !== b && part !== resized) {
       if (part.data.drawer) return { min: 0, max: 0 };
       const size = openingSizeLimits(db, part, axis);
       constrainDelta(range, b - a, innerHigh - innerLow, size.min, size.max);
@@ -164,10 +169,10 @@ function rollback(saved) {
 
 function guarded(db, product, action) {
   const saved = snapshot(product);
-  action();
+  if (action() === false) return false;
   relayout(db, product);
   const bad = violations(product);
-  if (!bad.length) return;
+  if (!bad.length) return true;
   rollback(saved);
   relayout(db, product);
   const v = bad[0];
@@ -175,36 +180,57 @@ function guarded(db, product, action) {
   throw new BuildError(`Размер детали «${v.part.title || v.part.name}» станет ${what} (${v.limit} мм)`);
 }
 
+function applyMovement(product, axis, shifts, delta) {
+  const [lo, hi] = AXIS_SIDES[axis];
+  for (const [id, [a, b]] of shifts) {
+    const { box } = product.get(id);
+    box[lo] += a * delta;
+    box[hi] += b * delta;
+  }
+}
+
 export function movePart(db, product, part, axis, lo) {
   if (!canMove(product, part, axis)) throw new BuildError('Деталь закреплена с двух сторон и по этой оси не двигается');
   opora(product, part);
-  const [low, high] = AXIS_SIDES[axis];
+  const [low] = AXIS_SIDES[axis];
   const shifts = movement(product, part, axis);
   const { min, max } = movementRange(db, product, axis, shifts);
   const delta = Math.max(min, Math.min(max, lo - part.box[low]));
   if (!Number.isFinite(delta) || Math.abs(delta) < EPS) return false;
-  guarded(db, product, () => {
-    for (const [id, [a, b]] of shifts) {
-      const { box } = product.get(id);
-      box[low] += a * delta;
-      box[high] += b * delta;
-    }
-  });
-  return true;
+  return guarded(db, product, () => applyMovement(product, axis, shifts, delta));
+}
+
+export function resizeFaces(box, axis, size, { keepHigh, fixedLow, fixedHigh }, shiftFace) {
+  const [lo, hi] = AXIS_SIDES[axis];
+  const face = fixedLow ? hi : fixedHigh || keepHigh ? lo : hi;
+  const previous = box.size(axis);
+  const adjust = (side) => {
+    const delta = (side === lo ? -1 : 1) * (size - box.size(axis));
+    if (Math.abs(delta) >= EPS) shiftFace(side, delta, side === lo ? [1, 0] : [0, 1]);
+  };
+  adjust(face);
+  if (!fixedLow && !fixedHigh) adjust(OPPOSITE[face]);
+  return Math.abs(box.size(axis) - previous) >= EPS;
 }
 
 export function resizePart(db, product, part, axis, size, keepHigh = false) {
-  if (part.parent) throw new BuildError('Размер составной детали задаётся её комплектом');
-  if (!(size > 0)) throw new BuildError('Размер должен быть больше нуля');
+  if (part.parent || part.casper || part.data.drawer) throw new BuildError('Размер составной детали задаётся её комплектом');
+  if (!Number.isFinite(size)) return false;
   const [lo, hi] = AXIS_SIDES[axis];
-  if (part.mount[lo] && part.mount[hi]) throw new BuildError('Деталь закреплена с двух сторон: размер определяется проёмом. Снимите крепление с одной стороны.');
-  if (Math.abs(part.box.size(axis) - size) < EPS) return false;
-  const anchor = part.mount[hi] && !part.mount[lo] ? hi : part.mount[lo] ? lo : keepHigh ? hi : lo;
-  guarded(db, product, () => {
-    part.box.setSize(axis, size, anchor);
-    fit(product, part);
-  });
-  return true;
+  const fixedLow = held(part, lo);
+  const fixedHigh = held(part, hi);
+  if (fixedLow && fixedHigh) throw new BuildError('Деталь закреплена с двух сторон: размер определяется проёмом. Снимите крепление с одной стороны.');
+  const { min, max } = partSizeLimits(db, part, axis);
+  if (min > max) return false;
+  const target = Math.min(max, Math.max(min, size));
+  if (Math.abs(part.box.size(axis) - target) < EPS) return false;
+  opora(product, part);
+  return guarded(db, product, () => resizeFaces(part.box, axis, target, { keepHigh, fixedLow, fixedHigh }, (_, requested, motion) => {
+    const shifts = movement(product, part, axis, motion);
+    const { min, max } = movementRange(db, product, axis, shifts, part);
+    const delta = Math.max(Math.min(0, min), Math.min(Math.max(0, max), requested));
+    if (Math.abs(delta) >= EPS) applyMovement(product, axis, shifts, delta);
+  }));
 }
 
 export function setGap(db, product, part, side, gap) {
