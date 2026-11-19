@@ -1,5 +1,5 @@
 import { Box, handleSize } from './geom.js';
-import { KIND, isPanel } from './model.js';
+import { isFullyLocked, KIND, isPanel } from './model.js';
 import { parseIdList } from './db.js';
 import { neighbors } from './opora.js';
 import { placementNeighbors, relayout, BuildError } from './build.js';
@@ -108,7 +108,7 @@ export function createDoor(project, db, product, system, cfg, point) {
   const pz = fronts.length ? Math.min(...fronts) : product.G;
   const front = anyOverlay && !useLocalOpening ? product.G : pz;
   const zg = Math.max(front - t, ...Object.keys(sides)
-    .filter((s) => over[s] !== 'in' && sides[s].data.yglyb).map((s) => sides[s].box.f));
+    .filter((s) => over[s] !== 'in' && (sides[s].data.yglyb || isFullyLocked(sides[s]))).map((s) => sides[s].box.f));
   if (zr - zl <= 0 || zt - zb <= 0) throw new BuildError('Не удалось определить проём двери');
 
   const gap = (s) => (over[s] === 'half' ? 1 : 2);
@@ -128,7 +128,7 @@ export function createDoor(project, db, product, system, cfg, point) {
   });
   for (const s of ['l', 'r', 'b', 't']) {
     const p = sides[s];
-    if (p.kind < 6) continue;
+    if (p.kind < 6 || isFullyLocked(p)) continue;
     cuts.push({ id: p.id, f: p.box.f, stenDver: p.stenDver, overlay: over[s] });
     if (over[s] !== 'in' && !p.data.yglyb && p.box.f > zg) p.box.f = zg;
     p.stenDver = zone.id;

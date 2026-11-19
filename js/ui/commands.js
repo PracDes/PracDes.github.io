@@ -1,6 +1,6 @@
 import { confirmDialog, openModal, h } from './dialogs.js';
 import { DRAG_STEP, rootPart } from '../core/move.js';
-import { KIND } from '../core/model.js';
+import { canLockPart, KIND } from '../core/model.js';
 import { AXIS_SIDES } from '../core/geom.js';
 import { isRoomLamp, roomAxisFixed, roomElementBox } from '../core/room.js';
 import { bindTouchGestures } from './touch.js';
@@ -140,8 +140,13 @@ export function bindCommands(app, viewport, panels) {
     const root = rootPart(product, part);
     const caption = app.selectedRoots.length > 1 ? 'Удалить выделенное' : root.kind === KIND.DOOR_ZONE ? 'Удалить дверь'
       : root !== part || root.children.length > 0 ? 'Удалить комплект' : 'Удалить деталь';
+    const locks = canLockPart(part) ? part.stenDver === -1 ? [
+      ['Блокировать частично', () => app.setPartLock(0)],
+      ['Блокировать полностью', () => app.setPartLock(-9)],
+    ] : [[part.stenDver === -9 ? 'Разблокировать [полностью]' : 'Разблокировать', () => app.setPartLock(-1)]] : [];
     openMenu(e, [
       ['Крепления и размеры', () => panels.showPartPanel()],
+      ...locks,
       [caption, commands.delete],
     ]);
   });

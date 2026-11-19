@@ -10,6 +10,8 @@ export const KIND = {
 export const PANEL_KINDS = new Set([KIND.POL, KIND.BOK, KIND.POLKA, KIND.PEREG, KIND.ZAD]);
 export const isPanel = (part) => PANEL_KINDS.has(part.kind);
 export const isWall = (part) => part.kind < 0;
+export const isFullyLocked = (part) => part.stenDver === -9 && !part.data.drawer && !part.parent;
+export const canLockPart = (part) => isPanel(part) && !part.parent && !part.casper && [0, -1, -9].includes(part.stenDver);
 
 export function boxWalls({ W, H, G }, allocateId) {
   const mk = (side, kind, group, box) => new Part({ id: allocateId(side), kind, group, role: 'wall-' + side, box, name: 'Граница изделия' });

@@ -1,6 +1,6 @@
 import { AXIS_SIDES, OPPOSITE, SIDES, SIDE_NB, SIDE_AXIS, EPS } from './geom.js';
-import { KIND } from './model.js';
-import { materialLimits } from './material.js';
+import { isFullyLocked, KIND } from './model.js';
+import { frontEdgeInset, materialLimits } from './material.js';
 import { opora } from './opora.js';
 import { relayout, BuildError } from './build.js';
 import { drawerWidthLimits } from './drawers.js';
@@ -11,6 +11,7 @@ const LONG = { x: new Set([6, 8, 16, 100, 102, 161]), y: new Set([7, 9, 16, 102,
 const UNLIMITED_OPENING = { x: new Set([6, 8, 16, 100, 101, 102, 161]), y: new Set([161]) };
 const STILL = [0, 0];
 const SHIFT = [1, 1];
+const EDGE_SUPPORTS = new Set([KIND.POL, KIND.BOK, KIND.POLKA, KIND.PEREG, 101]);
 const held = (part, side) => part.mount[side] || part.grab[side] !== -1;
 const gap = (part, side) => part.grab[side] === -1 ? 0 : part.grab[side];
 
@@ -50,7 +51,6 @@ export function centerHandle(product, handle, axis) {
 export function canMove(product, part, axis) {
   if (part.parent || part.casper) return false;
   if (part.data.drawer) return axis === 'y';
-  if (part.stenDver === -9) return true;
   if (part.stenDver !== -1) return false;
   const [lo, hi] = AXIS_SIDES[axis];
   return !part.mount[lo] && !part.mount[hi];
@@ -58,28 +58,48 @@ export function canMove(product, part, axis) {
 
 export function canResize(part, axis) {
   const [lo, hi] = AXIS_SIDES[axis];
-  return !part.parent && !part.casper && !part.data.drawer && !(held(part, lo) && held(part, hi));
+  return !part.parent && !part.casper && !part.data.drawer && (isFullyLocked(part) || !(held(part, lo) && held(part, hi)));
 }
 
-function* parallelSupports(product, part, axis) {
+export function canSetGapDirectly(part, axis) {
+  return Boolean(part && !part.parent && !part.casper && (!part.data.drawer || axis === 'y'));
+}
+
+function mountedFrontInset(product, part, support, side) {
+  if (!part.mount[side] || held(part, 'f') || part.stenDver !== -1 || part.data.yglyb || part.parent) return 0;
+  const { PL, PR, PT } = product.roles;
+  if (part.id === PL || part.id === PR || part.id === PT) return 0;
+  if (!EDGE_SUPPORTS.has(support.kind) || support.kind === 101) return 0;
+  if (!EDGE_SUPPORTS.has(part.kind) && !(part.kind === KIND.ZAD && SIDE_AXIS[side] === 'y')) return 0;
+  return frontEdgeInset(support);
+}
+
+function* parallelSupports(product, part, axis, withEdge) {
+  if (part.stenDver === 0) return;
   for (const side of SIDES) {
     if (SIDE_AXIS[side] === axis || !held(part, side)) continue;
     const support = product.get(part.nb[SIDE_NB[side]]);
-    if (support?.kind >= 6 && part.box.size(axis) <= support.box.size(axis) + EPS) yield support;
+    if (!(support?.kind >= 6)) continue;
+    const inset = withEdge && axis === 'z' ? mountedFrontInset(product, part, support, side) : 0;
+    if (inset || part.box.size(axis) <= support.box.size(axis) + EPS) yield { support, inset };
   }
 }
 
-function movement(product, root, axis, rootShift = SHIFT, resize = null) {
-  const [lo, hi] = AXIS_SIDES[axis];
+function dependentsOf(product) {
   const dependents = new Map();
   for (const part of product.realParts()) {
-    if (part === root || (part.casper && !part.parent)) continue;
+    if (part.casper && !part.parent) continue;
     const supports = part.parent ? [part.parent] : SIDES.filter((side) => held(part, side)).map((side) => part.nb[SIDE_NB[side]]);
     for (const id of new Set(supports)) {
       if (!dependents.has(id)) dependents.set(id, []);
       dependents.get(id).push(part);
     }
   }
+  return dependents;
+}
+
+function movement(product, root, axis, rootShift = SHIFT, resize = null, dependents = dependentsOf(product)) {
+  const [lo, hi] = AXIS_SIDES[axis];
   const shifts = new Map([[root.id, rootShift]]);
   const motion = (id) => shifts.get(id) ?? STILL;
   const travels = (id) => motion(id).every(Boolean);
@@ -92,6 +112,7 @@ function movement(product, root, axis, rootShift = SHIFT, resize = null) {
   };
   const displacement = (part) => {
     if (part.parent) return travels(part.parent) ? SHIFT : STILL;
+    if (isFullyLocked(part)) return STILL;
     const low = held(part, lo);
     const high = held(part, hi);
     const a = low ? motion(part.nb[SIDE_NB[lo]])[1] : 0;
@@ -111,8 +132,10 @@ function movement(product, root, axis, rootShift = SHIFT, resize = null) {
     const { face, db } = resize;
     const edge = face === lo ? 0 : 1;
     if (base[edge] || held(part, face)) return base;
-    const atEdge = [...parallelSupports(product, part, axis)].some((support) =>
-      motion(support.id)[edge] && Math.abs(part.box[face] - support.box[face]) < EPS);
+    const atEdge = [...parallelSupports(product, part, axis, true)].some(({ support, inset }) =>
+      motion(support.id)[edge] && (face === lo
+        ? part.box[face] - support.box[face]
+        : support.box[face] - inset - part.box[face]) <= EPS);
     if (!atEdge) return base;
     const other = OPPOSITE[face];
     const { min } = partSizeLimits(db, part, axis);
@@ -122,11 +145,12 @@ function movement(product, root, axis, rootShift = SHIFT, resize = null) {
   const pending = [root.id];
   for (const id of pending) {
     for (const part of dependents.get(id) ?? []) {
+      if (part === root) continue;
       const before = motion(part.id);
       const next = followEdge(part, displacement(part));
       const after = resize ? [Math.max(before[0], next[0]), Math.max(before[1], next[1])] : next;
       if (before[0] === after[0] && before[1] === after[1]) {
-        if (resize && !shifts.has(part.id)) shifts.set(part.id, STILL);
+        if ((resize || isFullyLocked(part)) && !shifts.has(part.id)) shifts.set(part.id, STILL);
         continue;
       }
       shifts.set(part.id, after);
@@ -152,8 +176,9 @@ function movementRange(db, product, axis, shifts, resized = null) {
     if (part.parent || part.casper) continue;
     const lower = product.get(part.nb[SIDE_NB[lo]]) ?? product.walls[lo];
     const upper = product.get(part.nb[SIDE_NB[hi]]) ?? product.walls[hi];
-    const innerLow = lower.box[hi] + gap(part, lo);
-    const innerHigh = upper.box[lo] - gap(part, hi);
+    const locked = isFullyLocked(part);
+    const innerLow = lower.box[hi] + (locked ? 0 : gap(part, lo));
+    const innerHigh = upper.box[lo] - (locked ? 0 : gap(part, hi));
     const before = shifts.get(lower.id)?.[1] ?? 0;
     const after = shifts.get(upper.id)?.[0] ?? 0;
     if (a !== b && part !== resized) {
@@ -165,10 +190,11 @@ function movementRange(db, product, axis, shifts, resized = null) {
     const clearance = part.data.drawer ? 2 : 0;
     constrainDelta(range, a - before, part.box[lo] - innerLow, clearance);
     constrainDelta(range, after - b, innerHigh - part.box[hi], clearance);
-    for (const holder of parallelSupports(product, part, axis)) {
-      const [start, end] = shifts.get(holder.id) ?? STILL;
-      constrainDelta(range, a - start, part.box[lo] - holder.box[lo]);
-      constrainDelta(range, end - b, holder.box[hi] - part.box[hi]);
+    if (locked) continue;
+    for (const { support, inset } of parallelSupports(product, part, axis, Boolean(resized))) {
+      const [start, end] = shifts.get(support.id) ?? STILL;
+      constrainDelta(range, a - start, part.box[lo] - support.box[lo]);
+      constrainDelta(range, end - b, support.box[hi] - inset - part.box[hi]);
     }
   }
   return range;
@@ -184,7 +210,7 @@ export function moveRange(db, product, part, axis) {
 export function violations(product) {
   const out = [];
   for (const part of product.parts.values()) {
-    if (part.kind < 6 || part.casper) continue;
+    if (part.kind < 6 || part.casper || isFullyLocked(part)) continue;
     for (const axis of AXES) {
       const size = part.box.size(axis);
       const min = Math.max(part.min[axis], EPS);
@@ -229,8 +255,10 @@ function applyMovement(product, axis, shifts, delta) {
   }
 }
 
-export function movePart(db, product, part, axis, lo) {
-  if (!canMove(product, part, axis)) throw new BuildError('Деталь закреплена с двух сторон и по этой оси не двигается');
+export function movePart(db, product, part, axis, lo, { manual = false } = {}) {
+  if (!canMove(product, part, axis) && !(manual && isFullyLocked(part))) {
+    throw new BuildError(isFullyLocked(part) ? 'Деталь заблокирована' : 'Деталь закреплена с двух сторон и по этой оси не двигается');
+  }
   opora(product, part);
   const [low] = AXIS_SIDES[axis];
   const shifts = movement(product, part, axis);
@@ -253,38 +281,100 @@ export function resizeFaces(box, axis, size, { keepHigh, fixedLow, fixedHigh }, 
   return Math.abs(box.size(axis) - previous) >= EPS;
 }
 
+function shiftResizeFace(db, product, part, axis, face, requested, motion, dependents) {
+  const [lo] = AXIS_SIDES[axis];
+  const resize = (face === lo ? requested > 0 : requested < 0) ? { face, db } : null;
+  let remaining = requested;
+  while (Math.abs(remaining) >= EPS) {
+    const shifts = movement(product, part, axis, motion, resize, dependents);
+    const { min, max } = movementRange(db, product, axis, shifts, part);
+    const delta = Math.max(Math.min(0, min), Math.min(Math.max(0, max), remaining));
+    if (Math.abs(delta) < EPS) break;
+    applyMovement(product, axis, shifts, delta);
+    remaining -= delta;
+  }
+  return Math.abs(requested - remaining) >= EPS;
+}
+
+function fitMountedFrontEdges(db, product, root, dependents) {
+  const connected = new Set([root]);
+  let changed = false;
+  for (const part of connected) {
+    for (const child of dependents.get(part.id) ?? []) connected.add(child);
+    let front = part.box.f;
+    for (const { support, inset } of parallelSupports(product, part, 'z', true)) {
+      if (inset) front = Math.min(front, support.box.f - inset);
+    }
+    if (front >= part.box.f - EPS) continue;
+    const limit = Math.max(front, part.box.g + partSizeLimits(db, part, 'z').min);
+    if (limit < part.box.f - EPS) {
+      changed = shiftResizeFace(db, product, part, 'z', 'f', limit - part.box.f, [0, 1], dependents) || changed;
+    }
+  }
+  return changed;
+}
+
+function resizeLockedPart(product, part, axis, size, keepHigh) {
+  const [lo, hi] = AXIS_SIDES[axis];
+  const box = part.box.clone().setSize(axis, size, keepHigh ? hi : lo);
+  const positionWithin = (lower, upper) => {
+    if (lower && box[lo] < lower.box[hi]) box.moveSide(lo, lower.box[hi]);
+    if (upper && box[hi] > upper.box[lo]) box.moveSide(hi, upper.box[lo]);
+  };
+  positionWithin(product.get(part.nb[SIDE_NB[lo]]), product.get(part.nb[SIDE_NB[hi]]));
+  positionWithin(product.walls[lo], product.walls[hi]);
+  if (!(box.size(axis) > 0 && Number.isFinite(box.size(axis)))) return false;
+  if (Math.abs(box[lo] - part.box[lo]) < EPS && Math.abs(box[hi] - part.box[hi]) < EPS) return false;
+  part.box = box;
+  return true;
+}
+
 export function resizePart(db, product, part, axis, size, keepHigh = false) {
   if (part.parent || part.casper || part.data.drawer) throw new BuildError('Размер составной детали задаётся её комплектом');
   if (!Number.isFinite(size)) return false;
   const [lo, hi] = AXIS_SIDES[axis];
+  if (isFullyLocked(part)) {
+    if (!(size > 0)) return false;
+    opora(product, part);
+    return guarded(db, product, () => {
+      if (!resizeLockedPart(product, part, axis, size, keepHigh)) return false;
+      fitMountedFrontEdges(db, product, part, dependentsOf(product));
+      return true;
+    });
+  }
   const fixedLow = held(part, lo);
   const fixedHigh = held(part, hi);
   if (fixedLow && fixedHigh) throw new BuildError('Деталь закреплена с двух сторон: размер определяется проёмом. Снимите крепление с одной стороны.');
   const { min, max } = partSizeLimits(db, part, axis);
   if (min > max) return false;
   const target = Math.min(max, Math.max(min, size));
-  if (Math.abs(part.box.size(axis) - target) < EPS) return false;
   opora(product, part);
-  return guarded(db, product, () => resizeFaces(part.box, axis, target, { keepHigh, fixedLow, fixedHigh }, (face, requested, motion) => {
-    const resize = target < part.box.size(axis) ? { face, db } : null;
-    let remaining = requested;
-    while (Math.abs(remaining) >= EPS) {
-      const shifts = movement(product, part, axis, motion, resize);
-      const { min, max } = movementRange(db, product, axis, shifts, part);
-      const delta = Math.max(Math.min(0, min), Math.min(Math.max(0, max), remaining));
-      if (Math.abs(delta) < EPS) break;
-      applyMovement(product, axis, shifts, delta);
-      remaining -= delta;
-    }
-  }));
+  const dependents = dependentsOf(product);
+  return guarded(db, product, () => {
+    const fitted = fitMountedFrontEdges(db, product, part, dependents);
+    return resizeFaces(part.box, axis, target, { keepHigh, fixedLow, fixedHigh }, (face, requested, motion) => {
+      shiftResizeFace(db, product, part, axis, face, requested, motion, dependents);
+    }) || fitted;
+  });
 }
 
-export function setGap(db, product, part, side, gap) {
+export function setGap(db, product, part, side, distance, { direct = false } = {}) {
+  const axis = SIDE_AXIS[side];
+  if (!axis || !Number.isFinite(distance) || (direct && !canSetGapDirectly(part, axis))) return false;
   opora(product, part);
   const nb = product.get(part.nb[SIDE_NB[side]]);
   if (!nb) return false;
-  const axis = SIDE_AXIS[side];
-  const [lo, hi] = AXIS_SIDES[axis];
-  const target = side === lo ? nb.box[hi] + gap : nb.box[lo] - gap - part.box.size(axis);
-  return movePart(db, product, part, axis, target);
+  const [lo] = AXIS_SIDES[axis];
+  const target = nb.box[OPPOSITE[side]] + (side === lo ? distance : -distance);
+  if (!direct) return movePart(db, product, part, axis, target - (side === lo ? 0 : part.box.size(axis)), { manual: true });
+  const delta = target - part.box[side];
+  if (!Number.isFinite(target) || Math.abs(delta) < EPS) return false;
+  const moving = part.data.drawer ? [part, ...part.children.map((id) => product.get(id)).filter(Boolean)] : [part];
+  const boxes = moving.map((item) => item.box.clone().moveSide(side, item === part ? target : item.box[side] + delta));
+  for (const box of boxes) {
+    if (!Number.isFinite(box.size(axis)) || box.size(axis) <= 0) return false;
+  }
+  moving.forEach((item, i) => { item.box = boxes[i]; });
+  for (const other of product.realParts()) opora(product, other);
+  return true;
 }

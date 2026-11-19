@@ -1,5 +1,5 @@
 import { Box, EPS, handleSize } from './geom.js';
-import { isPanel, KIND } from './model.js';
+import { isFullyLocked, isPanel, KIND } from './model.js';
 import { neighbors, opora } from './opora.js';
 import { placementNeighbors, relayout, BuildError } from './build.js';
 import { findMaterial, materialLimits } from './material.js';
@@ -466,7 +466,7 @@ function restoreCut(product, sideId, drawerId) {
   if (side.data.yglybBy.length) return;
   const depth = side.data.yglyb ?? 0;
   delete side.data.yglyb;
-  if (!depth) return;
+  if (!depth || isFullyLocked(side)) return;
   let front = side.box.f + depth;
   for (const door of product.parts.values()) {
     if (door.kind !== KIND.DOOR_ZONE) continue;

@@ -143,7 +143,7 @@ body:has(#right:not([hidden])) #status { padding-right: min(var(--right-width), 
 .rp-row label { color: var(--muted); }
 .rp-actions { display: grid; gap: 4px; margin-top: 10px; }
 .krep-cross { display: grid; grid-template: 15px 18px 18px 15px / 15px 50px 15px; gap: 4px 6px; justify-content: center; margin: 8px 0; }
-.krep-cross button { padding: 0; background: var(--field); border: 1px outset #737373; font-size: 12px; }
+.krep-cross button { padding: 0; background: var(--field); border: 1px solid #737373; font-size: 12px; }
 .krep-cross .mounted { background: #896641; color: #fff; }
 .krep-cross button:focus-visible { outline-color: #ddd; }
 .mount-t { grid-area: 1 / 2; }

@@ -1,7 +1,7 @@
 import { Box, SIDES, SIDE_NB, OPPOSITE, AXIS_SIDES, GROUP_THICK_AXIS, sideMap } from './geom.js';
 import { KIND, isPanel, Part } from './model.js';
 import { findNeighbors, opora, neighbors, OPENING_SUPPORTS } from './opora.js';
-import { applyMaterial, loadEdges, applyEdges } from './material.js';
+import { applyMaterial, loadEdges, applyEdges, frontEdgeInset } from './material.js';
 import { loadKrep } from './krep.js';
 import { reflowDrawers } from './drawers.js';
 
@@ -48,12 +48,10 @@ function defaultMounts(part, item, cur, nb) {
 }
 
 function frontInset(part, nb) {
-  const krF = (...list) => Math.max(0, ...list.map((p) => p.kr.f));
-  let ot;
-  if (part.group === 1) ot = krF(nb.x1, nb.x2);
-  else if (part.group === 0) ot = krF(nb.x1, nb.x2, nb.y1, nb.y2);
-  else ot = krF(nb.y1, nb.y2);
-  return ot < 1.9 ? 0 : ot;
+  const across = [nb.x1, nb.x2];
+  const vertical = [nb.y1, nb.y2];
+  const supports = part.group === 1 ? across : part.group === 0 ? [...across, ...vertical] : vertical;
+  return Math.max(...supports.map(frontEdgeInset));
 }
 
 export function clampSize(part) {

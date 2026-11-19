@@ -1,11 +1,11 @@
 import { h, calc, pickRow, pickPartCatalog, rowLabel, productDialog, confirmDialog } from './dialogs.js';
-import { canMove, canResize } from '../core/move.js';
+import { canMove, canResize, canSetGapDirectly } from '../core/move.js';
 import { defaultForm, productPositionError } from '../core/product.js';
 import { AXIS_SIDES, edgeSides, SIDE_LABEL, SIDE_NB, SIDE_AXIS, OPPOSITE } from '../core/geom.js';
 import { canUsePartMaterial, edgeChoices, materialLimits } from '../core/material.js';
 import { krepChoices, krepForPart } from '../core/krep.js';
 import { partCost, netSize } from '../core/price.js';
-import { isPanel } from '../core/model.js';
+import { isFullyLocked, isPanel } from '../core/model.js';
 import { DEFAULT_WALL_COLOR, ROOM_DIMENSION, roomAxisFixed, roomElementBox, roomElementUsesWallColor,
   roomItemSpec, roomItemSupported, roomKrepContext, roomMounts } from '../core/room.js';
 import { projectTotal } from '../core/report.js';
@@ -460,22 +460,31 @@ export class Panels {
       return Math.round(d * 10) / 10;
     };
     const { selectedParts, selectedPanel, selectedRoots } = app;
-    const field = (value, disabled, apply, title) => h('input', {
-      type: 'text', inputMode: 'decimal', value, disabled, title,
-      onkeydown: (e) => {
-        if (e.key !== 'Enter') return;
-        const target = e.currentTarget;
-        const unchanged = target.value === String(value);
-        target.blur();
-        if (unchanged && selectedParts.length > 1) apply(value);
-      },
-      onchange: (e) => {
-        const v = calc(e.target.value);
-        if (Number.isFinite(v)) apply(v); else this.drawRight();
-      },
-    });
-    const gapInput = (side) => field(gap(side), !selectedRoots.some((p) => canMove(product, p, SIDE_AXIS[side])),
-      (v) => app.setGap(side, v), 'Расстояние до соседней детали');
+    const gapInput = (side) => {
+      const axis = SIDE_AXIS[side];
+      const value = gap(side);
+      const direct = canSetGapDirectly(positionPart, axis);
+      const smart = selectedRoots.some((p) => canMove(product, p, axis) || isFullyLocked(p));
+      const apply = (input, withAlt) => {
+        const distance = calc(input.value);
+        input.value = String(value);
+        if (Number.isFinite(distance) && (withAlt ? direct : smart)) app.setGap(side, distance, { direct: withAlt });
+      };
+      let submitOnEnter = false;
+      return h('input', {
+        type: 'text', inputMode: 'decimal', value, disabled: !direct && !smart,
+        title: 'Расстояние до соседней детали · Alt+Enter — задать напрямую',
+        onkeydown: (e) => {
+          if (e.key !== 'Enter' || e.isComposing) return;
+          e.preventDefault();
+          submitOnEnter = true;
+          apply(e.currentTarget, e.altKey);
+          e.currentTarget.blur();
+          submitOnEnter = false;
+        },
+        onchange: (e) => { if (!submitOnEnter) apply(e.currentTarget, false); },
+      });
+    };
     const cost = partCost(db, part);
     const net = netSize(part);
 

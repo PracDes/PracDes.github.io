@@ -1,6 +1,6 @@
-import { KIND, Project, isPanel } from '../core/model.js';
+import { canLockPart, isFullyLocked, KIND, Project, isPanel } from '../core/model.js';
 import { place, relayout, BuildError } from '../core/build.js';
-import { canMove, canResize, centerHandle, movePart, resizePart, setGap, rootPart, violations } from '../core/move.js';
+import { canMove, canResize, canSetGapDirectly, centerHandle, movePart, resizePart, setGap, rootPart, violations } from '../core/move.js';
 import { SLOTS, createProduct, moveProductInRoom, normalizeAngle, productCenter, productPosition, productPositionDetails, productPositionError, wallPosition } from '../core/product.js';
 import { centeredOffset, opora } from '../core/opora.js';
 import { createDoor, doorOpeningFromParts, removeAssemblies } from '../core/doors.js';
@@ -68,12 +68,15 @@ export class App extends EventTarget {
   get product() { return this.project.products.find((p) => p.id === this.activeId) ?? null; }
   get editingRoom() { return this.mode === 'room' && this.roomFill && !!this.project.room; }
   get roomSelected() { return this.project.room?.elements?.find((element) => element.id === this.roomSelectedId) ?? null; }
-  get selected() { return this.product?.parts.get(this.selectedIds.values().next().value) ?? null; }
+  get selected() { return this.product?.parts.get([...this.selectedIds].at(-1)) ?? null; }
   get selectedParts() {
     const parts = this.product?.parts;
     return [...this.selectedIds].map((id) => parts?.get(id)).filter(Boolean);
   }
-  get selectedPanel() { return this.selectedParts.find(isPanel) ?? null; }
+  get selectedPanel() {
+    const part = this.selected;
+    return part && isPanel(part) ? part : this.selectedParts.find(isPanel) ?? null;
+  }
   get selectedRoots() {
     const { product } = this;
     return [...new Set(this.selectedParts.map((part) => rootPart(product, part)))];
@@ -689,12 +692,29 @@ export class App extends EventTarget {
       resizePart(this.db, product, part, axis, size, keepHigh) || changed, false), { skipUnchanged: true });
   }
 
-  setGap(side, gap) {
+  setGap(side, gap, { direct = false } = {}) {
+    const axis = SIDE_AXIS[side];
+    if (!axis || this.dragSnap || this.placement) return false;
     const { product, selectedRoots } = this;
-    const targets = selectedRoots.filter((part) => canMove(product, part, SIDE_AXIS[side]));
-    if (!targets.length) return;
-    this.mutate(() => targets.reduce((changed, part) =>
+    if (direct) {
+      const part = this.movable?.data.drawer ? this.movable : this.selected;
+      if (!canSetGapDirectly(part, axis)) return false;
+      return this.mutate(() => setGap(this.db, product, part, side, gap, { direct }), { skipUnchanged: true });
+    }
+    const targets = selectedRoots.filter((part) => canMove(product, part, axis) || isFullyLocked(part));
+    if (!targets.length) return false;
+    return this.mutate(() => targets.reduce((changed, part) =>
       setGap(this.db, product, part, side, gap) || changed, false), { skipUnchanged: true });
+  }
+
+  setPartLock(state) {
+    if (![-9, -1, 0].includes(state) || this.dragSnap || this.placement) return false;
+    const targets = this.selectedParts.filter((part) => canLockPart(part) && part.stenDver !== state);
+    if (!targets.length) return false;
+    return this.mutate(() => {
+      for (const part of targets) part.stenDver = state;
+      return true;
+    }, { skipUnchanged: true });
   }
 
   toggleMount(side) {

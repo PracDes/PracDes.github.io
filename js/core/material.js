@@ -120,6 +120,8 @@ export function edgeChoices(db, part) {
   return db.edgesFor(part.kind).filter((r) => edgeFits(r, thick));
 }
 
+export const frontEdgeInset = (part) => part.kr.f >= 1.9 ? part.kr.f : 0;
+
 export function canUsePartMaterial(db, product, part, row) {
   if (!isPanel(part) || !row?.posSet?.has(part.kind) || !db.forProduct(row) || row.unit !== 'м2' || !(row.t > 0)) return false;
   if (row.t === part.catalogThickness) return true;
