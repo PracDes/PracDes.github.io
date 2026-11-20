@@ -7,7 +7,7 @@ import { KIND } from '../core/model.js';
 import { materialTextureUrl } from './texture-source.js';
 import { ROOM_TEXTURES } from '../core/textures.js';
 import { normalizeAngle, productCenter, productPositionError } from '../core/product.js';
-import { AXIS_SIDES, SIDES, SIDE_AXIS, SIDE_NB } from '../core/geom.js';
+import { AXIS_SIDES, EPS, SIDES, SIDE_AXIS, SIDE_NB } from '../core/geom.js';
 import { isRoomLamp, planRoomElement, roomAxisFixed, roomCursorOverlaps, roomElementBox, roomPlacementContext } from '../core/room.js';
 import { confirmDialog, h } from './dialogs.js';
 
@@ -39,6 +39,7 @@ const DOOR_KINDS = new Set([KIND.DOOR_ZONE, KIND.DOOR_SET]);
 const UP = new THREE.Vector3(0, 1, 0);
 const AXIS_VECTOR = { x: new THREE.Vector3(1, 0, 0), y: UP, z: new THREE.Vector3(0, 0, 1) };
 const yaw = (product) => -THREE.MathUtils.degToRad(normalizeAngle(product.angle));
+const boxOrigin = (box) => ({ x: box.l, y: box.b, z: box.g });
 
 function loadPartOutlineIndex() {
   try {
@@ -780,22 +781,44 @@ export class Viewport {
     return (2 * dist * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2))) / this.renderer.domElement.clientHeight / MM;
   }
 
-  startProductDrag(e, product) {
+  startProductDrag(e, product, placement = false) {
     const c = productCenter(product);
     const point = new THREE.Vector3(c.x * MM, c.y * MM, c.z * MM);
     const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion).setY(0).normalize();
     const depth = right.clone().cross(UP);
-    return { center: { ...c, y: product.y }, origin: { x: product.x, y: product.y, z: product.z }, right, depth,
+    const origin = { x: placement ? c.x : product.x, y: product.y, z: placement ? c.z : product.z };
+    return { origin, right, depth,
       screenX: e.clientX, screenY: e.clientY, raise: e.shiftKey, px: this.pixelSize(point), moved: false };
   }
 
   dragPosition(e, drag) {
-    const step = e.altKey ? 1 : DRAG_STEP;
-    const snap = (distance) => Math.round(distance / step) * step;
     const dx = (e.clientX - drag.screenX) * drag.px;
     const dy = (e.clientY - drag.screenY) * drag.px;
-    return drag.raise ? { x: snap(drag.right.x * dx), y: snap(-dy), z: snap(drag.right.z * dx) }
-      : { x: snap(drag.right.x * dx + drag.depth.x * dy), y: 0, z: snap(drag.right.z * dx + drag.depth.z * dy) };
+    return drag.raise ? { x: drag.right.x * dx, y: -dy, z: drag.right.z * dx }
+      : { x: drag.right.x * dx + drag.depth.x * dy, y: 0, z: drag.right.z * dx + drag.depth.z * dy };
+  }
+
+  applyDrag(e, drag, offset, move, position) {
+    const step = e.altKey ? 1 : DRAG_STEP;
+    const target = {};
+    const axes = Object.keys(offset);
+    for (const axis of axes) {
+      const distance = offset[axis] - (drag.blockedAt?.[axis] ?? 0);
+      target[axis] = drag.origin[axis] + Math.round(distance / step) * step;
+    }
+    if (move(target)) drag.moved = true;
+    const actual = position();
+    for (const axis of axes) {
+      if (!Number.isFinite(actual?.[axis]) || Math.abs(actual[axis] - target[axis]) < EPS) continue;
+      drag.origin[axis] = actual[axis];
+      (drag.blockedAt ??= {})[axis] = offset[axis];
+    }
+  }
+
+  dragRoomElement(e, drag, offset) {
+    const { app } = this;
+    this.applyDrag(e, drag, offset, (target) => app.moveRoomElement(target, true),
+      () => app.roomSelected && boxOrigin(roomElementBox(app.project.room, app.roomSelected)));
   }
 
   orbitCamera(dx, dy) {
@@ -826,7 +849,7 @@ export class Viewport {
     const down = { button: e.button, x: e.clientX, y: e.clientY, pointerId: e.pointerId, ctrlKey: e.ctrlKey, moved: false };
     this.down = down;
     if (app.placement) {
-      if (e.button === 0) down.placement = this.startProductDrag(e, app.placement);
+      if (e.button === 0) down.placement = this.startProductDrag(e, app.placement, true);
       return;
     }
     if (this.creationTarget && e.button === 0) {
@@ -846,7 +869,7 @@ export class Viewport {
       down.drag = { room: true, roomObject: element.kind === KIND.ROOM_ELEMENT, pointerX: e.clientX, pointerY: e.clientY,
         previousX: e.clientX, previousY: e.clientY, shift: e.shiftKey,
         plane: new THREE.Plane().setFromNormalAndCoplanarPoint(normal, target.point), start: target.point,
-        origin: { x: box.l, y: box.b, z: box.g }, px: this.pixelSize(target.point), moved: false };
+        origin: boxOrigin(box), px: this.pixelSize(target.point), moved: false };
       return;
     }
     const hit = this.hit();
@@ -882,7 +905,7 @@ export class Viewport {
     if (Math.abs(normal.dot(direction)) <= 0.3) normal.copy(direction).negate();
     down.drag = {
       axes, angle, start: hit.point.clone(), plane: new THREE.Plane().setFromNormalAndCoplanarPoint(normal, hit.point),
-      origin: { x: part.box.l, y: part.box.b, z: part.box.g }, px: this.pixelSize(hit.point), moved: false,
+      origin: boxOrigin(part.box), px: this.pixelSize(hit.point), moved: false,
     };
   }
 
@@ -890,12 +913,11 @@ export class Viewport {
     let d = this.drag;
     const { app } = this;
     if (d.room) {
-      const step = e.altKey ? 1 : DRAG_STEP;
-      const snap = (value) => Math.round(value / step) * step;
       if (d.roomObject) {
         if (d.shift !== e.shiftKey) {
           const box = roomElementBox(app.project.room, app.roomSelected);
-          d.origin = { x: box.l, y: box.b, z: box.g };
+          d.origin = boxOrigin(box);
+          d.blockedAt = null;
           d.pointerX = d.previousX;
           d.pointerY = d.previousY;
           d.shift = e.shiftKey;
@@ -907,38 +929,38 @@ export class Viewport {
         const view = this.camera.position.clone().sub(this.controls.target);
         const front = Math.abs(view.x) < Math.abs(view.z / 2);
         const sign = Math.sign(front ? view.z : view.x) || 1;
-        const target = e.shiftKey ? { y: d.origin.y - snap(dy * d.px) }
-          : { x: d.origin.x + snap((front ? dx : dy) * sign * d.px),
-            z: d.origin.z + snap((front ? dy : -dx) * sign * d.px) };
-        if (app.moveRoomElement(target, true)) d.moved = true;
+        const offset = e.shiftKey ? { y: -dy * d.px }
+          : { x: (front ? dx : dy) * sign * d.px, z: (front ? dy : -dx) * sign * d.px };
+        this.dragRoomElement(e, d, offset);
         return;
       }
       const point = this.raycaster.ray.intersectPlane(d.plane, new THREE.Vector3());
       if (!point) return;
       const delta = point.sub(d.start).multiplyScalar(1 / MM);
-      const target = d.plane.normal.y && e.shiftKey ? { y: d.origin.y + snap((down.y - e.clientY) * d.px) }
-        : { x: d.origin.x + snap(delta.x), y: d.origin.y + snap(delta.y), z: d.origin.z + snap(delta.z) };
-      if (app.moveRoomElement(target, true)) d.moved = true;
+      const offset = d.plane.normal.y && e.shiftKey ? { y: (down.y - e.clientY) * d.px } : delta;
+      this.dragRoomElement(e, d, offset);
       return;
     }
     if (d.product) {
       if (d.raise !== e.shiftKey) this.drag = d = { product: true, ...this.startProductDrag(e, app.product), moved: d.moved };
-      const delta = this.dragPosition(e, d);
-      if (app.dragProductTo({ x: d.origin.x + delta.x, y: d.origin.y + delta.y, z: d.origin.z + delta.z })) d.moved = true;
+      this.applyDrag(e, d, this.dragPosition(e, d), (target) => app.dragProductTo(target), () => app.product);
       return;
     }
-    const step = e.altKey ? 1 : DRAG_STEP;
-    const snap = (v) => Math.round(v / step) * step;
-    const want = {};
-    if (e.shiftKey) want.z = d.origin.z + snap((e.clientX - down.x) * d.px);
-    else if (app.sub !== 'overview') {
+    const offset = {};
+    if (e.shiftKey) {
+      if (d.axes.includes('z')) offset.z = (e.clientX - down.x) * d.px;
+    } else if (app.sub !== 'overview') {
       const p = this.raycaster.ray.intersectPlane(d.plane, new THREE.Vector3());
       if (!p) return;
       const delta = p.sub(d.start).applyAxisAngle(UP, -d.angle);
-      want.x = d.origin.x + snap(delta.x / MM);
-      want.y = d.origin.y + snap(delta.y / MM);
+      if (d.axes.includes('x')) offset.x = delta.x / MM;
+      if (d.axes.includes('y')) offset.y = delta.y / MM;
     }
-    for (const axis of d.axes) if (axis in want && app.dragTo(axis, want[axis])) d.moved = true;
+    if (Object.keys(offset).length) this.applyDrag(e, d, offset, (target) => {
+      let moved = false;
+      for (const axis of d.axes) if (axis in target && app.dragTo(axis, target[axis])) moved = true;
+      return moved;
+    }, () => app.movable && boxOrigin(app.movable.box));
     const part = app.movable;
     if (part) this.setHint(`X: ${Math.round(part.box.l)}   Y: ${Math.round(part.box.b)}   Z: ${Math.round(part.box.g)}   ( Shift — по глубине, Alt — шаг 1 мм )`);
   }
@@ -972,10 +994,9 @@ export class Viewport {
     if (this.creationTarget) this.rememberCreationPointer(e);
     if (e.buttons === LEFT_BUTTON && down.button === 0) {
       if (down.placement && app.placement) {
-        if (down.placement.raise !== e.shiftKey) down.placement = this.startProductDrag(e, app.placement);
-        const { center } = down.placement;
-        const delta = this.dragPosition(e, down.placement);
-        app.movePlacement({ x: center.x + delta.x, y: center.y + delta.y, z: center.z + delta.z });
+        if (down.placement.raise !== e.shiftKey) down.placement = this.startProductDrag(e, app.placement, true);
+        this.applyDrag(e, down.placement, this.dragPosition(e, down.placement), (target) => app.movePlacement(target),
+          () => app.placement && { ...productCenter(app.placement), y: app.placement.y });
         return;
       }
       if (down.drag) { this.trackDrag(e, down); return; }
@@ -997,13 +1018,11 @@ export class Viewport {
     if (!drag) {
       const box = roomElementBox(app.project.room, element);
       const center = new THREE.Vector3(box.cx * MM, box.cy * MM, box.cz * MM);
-      this.roomShiftDrag = { pointer: e.clientY, y: box.b, px: this.pixelSize(center), moved: false };
+      this.roomShiftDrag = { pointer: e.clientY, origin: boxOrigin(box), px: this.pixelSize(center), moved: false };
       app.beginDrag();
       return;
     }
-    const step = e.altKey ? 1 : DRAG_STEP;
-    const delta = Math.round((drag.pointer - e.clientY) * drag.px / step) * step;
-    if (app.moveRoomElement({ y: drag.y + delta }, true)) drag.moved = true;
+    this.dragRoomElement(e, drag, { y: (drag.pointer - e.clientY) * drag.px });
   }
 
   endRoomShiftDrag() {

@@ -265,6 +265,7 @@ export function buildCorpus(project, db, product, form) {
   const withLegs = form.floorType === 'podium-legs';
   const kepka = form.roofType === 'kepka' ? { vylet: Number(form.kepkaFront) || 0, zad: Number(form.kepkaBack) || 0 } : null;
   const roles = () => ({ PL: product.role('PL'), PR: product.role('PR'), PB: product.role('PB'), PT: product.role('PT') });
+  const sideDepthInset = (support) => support.kr.f > 1.1 ? support.kr.f : 0;
 
   if (P.floor.on && (form.floorType === 'nakl' || withLegs)) {
     const pb = corpusPanel(project, db, product, { kind: KIND.POL, group: 1, kod: P.floor.kod, title: 'Пол', role: 'PB', edge: P.floor.edge });
@@ -292,12 +293,12 @@ export function buildCorpus(project, db, product, form) {
     const g0 = side.box.g;
     let tj = 0;
     if (real(PT)) {
-      tj = kepka ? kepka.vylet + kepka.zad : PT.kr.f;
+      tj = kepka ? kepka.vylet + kepka.zad : sideDepthInset(PT);
       const sz = PT.box.f - g0 - tj;
       side.box.g = g0 + (kepka ? kepka.zad : 0);
       side.box.f = side.box.g + sz;
     }
-    if (real(PB) && tj === 0 && (form.floorType === 'nakl' || withLegs)) side.box.f = PB.box.f - PB.kr.f;
+    if (real(PB) && tj === 0 && (form.floorType === 'nakl' || withLegs)) side.box.f = PB.box.f - sideDepthInset(PB);
     setEdges(db, product, side, P[key].edge);
   }
   if (P.roof.on && form.roofType === 'vkl') {
